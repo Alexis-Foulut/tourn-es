@@ -155,6 +155,7 @@ input[type=text]:focus,textarea:focus{outline:none;box-shadow:inset 0 0 0 2px va
 .ph .pl small{display:block;font-weight:500;color:var(--mute);font-size:12px}
 .ph .pv{font-size:13px;color:var(--mute);text-align:right}
 .ph .pv b{color:var(--ink);font-weight:700}
+.snaprow{display:flex;align-items:center;gap:10px;margin:-4px 0 12px}.snaprow .place{background:var(--soft)}.snaprow .place.on{background:var(--ink);color:var(--bg)}.snaprow small{color:var(--mute);font-size:12.5px}
 .filters{display:flex;gap:6px;overflow-x:auto;margin:0 0 12px;padding-bottom:2px}
 .filters button{flex:none;border:0;min-height:38px;padding:0 13px;border-radius:99px;background:var(--soft);font-weight:700;font-size:13px;color:var(--mute);display:inline-flex;align-items:center;gap:7px}
 .filters button i{width:10px;height:10px;border-radius:50%}
@@ -313,6 +314,7 @@ details[open].card summary::after{transform:rotate(-135deg);margin-bottom:-4px}
     <div class="stat"><b class="num" id="vPause"></b><span>en pause</span></div>
   </div>
   <div class="filters" id="filters"></div>
+  <div class="snaprow"><button class="place" id="snapBtn"><svg class="i" viewBox="0 0 24 24"><path d="M4 19c4 0 4-6 8-6s4 6 8 6M4 5h16"/></svg><span id="snapTxt">Coller aux routes</span></button><small id="snapInfo"></small></div>
   <button class="btn y" id="goGuide"><svg class="i" viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>Me guider sur cette tournée</button>
   <div class="row"><button class="btn soft" id="goStart"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="10" r="3"/><path d="M12 21s-7-5.6-7-11a7 7 0 0114 0c0 5.4-7 11-7 11z"/></svg>Itinéraire jusqu'au départ</button></div>
 
@@ -376,6 +378,7 @@ details[open].card summary::after{transform:rotate(-135deg);margin-bottom:-4px}
 <div id="toast" role="status"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/leaflet-polylineoffset@1.1.1/leaflet.polylineoffset.js"></script>
 <script>
 {
 const $ = s => document.querySelector(s);
@@ -586,7 +589,7 @@ function hideMe() { if (me) { map.removeLayer(me); map.removeLayer(meAcc); me = 
 const myPos = () => me ? [me.getLatLng().lat, me.getLatLng().lng] : null;
 function sheetH() { const s = document.querySelector('.sheet.on'); return s ? s.offsetHeight : 0 }
 function fit(latlngs) { if (!latlngs.length) return; map.fitBounds(L.latLngBounds(latlngs.map(p => [p[0], p[1]])), {paddingTopLeft: [30, 90], paddingBottomRight: [30, sheetH() + 20], maxZoom: 17}) }
-function arrowIcon(rot, color) { return L.divIcon({className: 'arw', html: `<svg width="18" height="18" viewBox="0 0 24 24" style="transform:rotate(${rot.toFixed(0)}deg)"><path d="M12 3l7 15-7-4-7 4z" fill="${color}" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>`, iconSize: [18, 18], iconAnchor: [9, 9]}) }
+function arrowIcon(rot, color) { return L.divIcon({className: 'arw', html: `<svg width="18" height="18" viewBox="0 0 24 24" style="transform:rotate(${rot.toFixed(0)}deg) translate(${OFF}px,0)"><path d="M12 3l7 15-7-4-7 4z" fill="${color}" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>`, iconSize: [18, 18], iconAnchor: [9, 9]}) }
 function addArrows(pts, color, every) {
   const s = resample(pts, every);
   for (let i = 1; i < s.length; i++) {
@@ -594,20 +597,49 @@ function addArrows(pts, color, every) {
     L.marker([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], {icon: arrowIcon(bearing(a, b), color), interactive: false, keyboard: false}).addTo(arrowL);
   }
 }
+/* lissage + simplification (affichage seulement) */
+function simplify(pts, tol) {
+  if (pts.length < 3) return pts;
+  const k = Math.cos(rad(pts[0][0])) * 111320, P = pts.map(p => [p[1] * k, p[0] * 110540]);
+  const keep = new Uint8Array(pts.length); keep[0] = keep[pts.length - 1] = 1;
+  const st = [[0, pts.length - 1]];
+  while (st.length) {
+    const [a, b] = st.pop(); let md = 0, mi = -1;
+    const [x1, y1] = P[a], [x2, y2] = P[b], dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1e-9;
+    for (let i = a + 1; i < b; i++) { const u = Math.max(0, Math.min(1, ((P[i][0] - x1) * dx + (P[i][1] - y1) * dy) / L2)); const ex = x1 + u * dx - P[i][0], ey = y1 + u * dy - P[i][1], d = ex * ex + ey * ey; if (d > md) { md = d; mi = i } }
+    if (mi > 0 && md > tol * tol) { keep[mi] = 1; st.push([a, mi], [mi, b]) }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+function smooth(pts) {
+  const p = pts.map(q => [q[0], q[1]]); if (p.length < 4) return p;
+  const out = [p[0]];
+  for (let i = 1; i < p.length - 1; i++) out.push([(p[i - 1][0] + 2 * p[i][0] + p[i + 1][0]) / 4, (p[i - 1][1] + 2 * p[i][1] + p[i + 1][1]) / 4]);
+  out.push(p[p.length - 1]);
+  return simplify(out, 2.5);
+}
+const OFF = 5; // décalage à droite du sens de passage (px) : aller et retour côte à côte
+const marksKey = t => JSON.stringify((t.marks || []).map(m => [m.type, m.t])) + ':' + flat(t).length;
+let snapOn = load('tournees_snap', false);
+function displayRuns(t) {
+  if (snapOn && t.snap && t.snap.key === marksKey(t)) return t.snap.runs.map(r => ({k: r.k, ll: r.ll}));
+  return runs(t).map(r => ({k: r.k, ll: smooth(r.pts)}));
+}
 function drawRunLine(run, layer) {
-  const ll = run.pts.map(p => [p[0], p[1]]);
-  if (run.k === 'trajet') { L.polyline(ll, {color: PH.trajet.c, weight: 4, dashArray: '2 9', lineCap: 'round', opacity: .95}).addTo(layer); return }
-  L.polyline(ll, {color: '#ffffff', weight: 10, opacity: .9}).addTo(layer);
-  L.polyline(ll, {color: PH[run.k].c, weight: 6}).addTo(layer);
+  const ll = run.ll || smooth(run.pts);
+  if (ll.length < 2) return;
+  if (run.k === 'trajet') { L.polyline(ll, {color: PH.trajet.c, weight: 4, dashArray: '2 9', lineCap: 'round', opacity: .95, offset: OFF}).addTo(layer); return }
+  L.polyline(ll, {color: '#ffffff', weight: 8, opacity: .9, offset: OFF}).addTo(layer);
+  L.polyline(ll, {color: PH[run.k].c, weight: 5, offset: OFF}).addTo(layer);
 }
 function drawMarks(t, layer) { for (const m of sortedMarks(t)) if (MK[m.type] && isFinite(m.lat)) L.marker([m.lat, m.lng], {icon: markIcon(m)}).bindPopup(`<b>${esc(MK[m.type].l)}</b>${m.site ? '<br>' + esc(SITE[m.site].full) : ''}`).addTo(layer) }
 function drawTour(t, f) {
   trackL.clearLayers(); arrowL.clearLayers();
   f = f || 'all';
-  const RR = runs(t).filter(r => f === 'all' || r.k === f);
-  for (const r of RR) if (r.pts.length > 1 && r.k === 'trajet') drawRunLine(r, trackL);
-  for (const r of RR) if (r.pts.length > 1 && r.k !== 'trajet') drawRunLine(r, trackL);
-  for (const r of RR) if (r.k !== 'trajet' && r.pts.length > 1) addArrows(r.pts, PH[r.k].c, 140);
+  const RR = displayRuns(t).filter(r => f === 'all' || r.k === f);
+  for (const r of RR) if (r.k === 'trajet') drawRunLine(r, trackL);
+  for (const r of RR) if (r.k !== 'trajet') drawRunLine(r, trackL);
+  for (const r of RR) if (r.k !== 'trajet' && r.ll.length > 1) addArrows(r.ll, PH[r.k].c, 140);
   const all = flat(t); if (!all.length) return;
   if (f === 'all') {
     L.marker(all[0], {icon: pinIcon('D', '#1fa463')}).addTo(trackL);
@@ -761,8 +793,8 @@ $('#new').onclick = () => {
 const recPhase = () => phases(rec, activeNow() + 1).slice(-1)[0].k;
 function newLive() {
   const k = recPhase();
-  if (k === 'trajet') { liveHalo = L.polyline([], {opacity: 0}).addTo(trackL); livePoly = L.polyline([], {color: PH.trajet.c, weight: 4, dashArray: '2 9', lineCap: 'round'}).addTo(trackL) }
-  else { liveHalo = L.polyline([], {color: '#fff', weight: 10, opacity: .9}).addTo(trackL); livePoly = L.polyline([], {color: PH[k].c, weight: 6}).addTo(trackL) }
+  if (k === 'trajet') { liveHalo = L.polyline([], {opacity: 0}).addTo(trackL); livePoly = L.polyline([], {color: PH.trajet.c, weight: 4, dashArray: '2 9', lineCap: 'round', offset: OFF}).addTo(trackL) }
+  else { liveHalo = L.polyline([], {color: '#fff', weight: 8, opacity: .9, offset: OFF}).addTo(trackL); livePoly = L.polyline([], {color: PH[k].c, weight: 5, offset: OFF}).addTo(trackL) }
   const seg = rec.segments[rec.segments.length - 1], last = seg && seg[seg.length - 1];
   if (last) { livePoly.addLatLng([last[0], last[1]]); liveHalo.addLatLng([last[0], last[1]]) }
 }
@@ -933,12 +965,52 @@ function openTour(id, keep) {
   $('#vDist').textContent = fmtD(cur.distance); $('#vTime').textContent = fmtH(cur.activeMs); $('#vPause').textContent = fmtH(cur.pauseMs || 0);
   drawSites(); drawTour(cur, filter); drawNotes(cur.notes);
   if (!keep) { extraL.clearLayers(); rp.marker = null; $('#stepsBox').open = false; show('view') }
-  renderFilters(); renderDay(); renderMarks(); renderNotes(); renderSteps();
+  renderFilters(); paintSnap(); renderDay(); renderMarks(); renderNotes(); renderSteps();
   rp.pts = flat(cur); if (!keep) rp.t = 0; paintRp(); rpInfo();
   if (!keep) fit(rp.pts);
   loadStreets(cur, prep(cur, filter === 'trajet' ? 'all' : filter), renderSteps);
 }
 const refresh = () => { save(KEY, tours); openTour(cur.id, true) };
+function paintSnap() {
+  const ok = cur && cur.snap && cur.snap.key === marksKey(cur);
+  $('#snapBtn').classList.toggle('on', snapOn && ok);
+  $('#snapTxt').textContent = snapOn && ok ? 'Collé aux routes' : 'Coller aux routes';
+  $('#snapInfo').textContent = snapOn && ok ? 'Appuie pour revoir le tracé GPS brut' : ok ? '' : 'Recale le tracé sur les rues';
+}
+let snapping = false;
+async function snapTour(t) {
+  const out = [], RR = runs(t), total = RR.reduce((a, r) => a + Math.ceil(resample(r.pts, 20).length / 90), 0); let done = 0;
+  for (const r of RR) {
+    const s = resample(r.pts, 20); let ll = [];
+    if (s.length < 2) { out.push({k: r.k, ll: s}); continue }
+    for (let i = 0; i < s.length - 1; i += 90) {
+      const chunk = s.slice(i, i + 100);
+      if (chunk.length < 2) break;
+      $('#snapInfo').textContent = 'Recalage… ' + Math.min(99, Math.round(++done / total * 100)) + ' %';
+      try {
+        const url = 'https://router.project-osrm.org/match/v1/driving/' + chunk.map(p => p[1].toFixed(6) + ',' + p[0].toFixed(6)).join(';') + '?overview=full&geometries=geojson&gaps=ignore&tidy=true&radiuses=' + chunk.map(() => 30).join(';');
+        const j = await (await fetch(url)).json();
+        if (j.code === 'Ok' && j.matchings && j.matchings.length) for (const m of j.matchings) ll = ll.concat(m.geometry.coordinates.map(c => [c[1], c[0]]));
+        else ll = ll.concat(chunk);
+      } catch (e) { throw e }
+      await sleep(350);
+    }
+    out.push({k: r.k, ll: simplify(ll, 1.5)});
+  }
+  t.snap = {key: marksKey(t), runs: out}; save(KEY, tours);
+}
+$('#snapBtn').onclick = async () => {
+  if (snapping || !cur) return;
+  const ok = cur.snap && cur.snap.key === marksKey(cur);
+  if (snapOn && ok) { snapOn = false; save('tournees_snap', false); drawTour(cur, filter); paintSnap(); return }
+  snapOn = true; save('tournees_snap', true);
+  if (!ok) {
+    snapping = true; const t = cur;
+    try { await snapTour(t); toast('Tracé collé aux routes') } catch (e) { toast('Recalage impossible (pas de réseau ?)'); snapOn = false; save('tournees_snap', false) }
+    snapping = false; if (cur !== t) return;
+  }
+  drawTour(cur, filter); paintSnap();
+};
 function renderFilters() {
   const parts = partsOf(cur);
   if (parts.length < 2) { $('#filters').hidden = true; return }
@@ -1141,9 +1213,9 @@ function startGuide(part) {
   }
   guide = {P, part, notes, stages, idx: 0, said: new Set(), off: false, done: false, started: false, dumpSite: null};
   trackL.clearLayers(); arrowL.clearLayers(); extraL.clearLayers(); rp.marker = null; drawNotes(cur.notes); drawSites();
-  if (part === 'all') { const RR = runs(cur); for (const r of RR) if (r.pts.length > 1) drawRunLine(r, trackL); for (const r of RR) if (r.k !== 'trajet' && r.pts.length > 1) addArrows(r.pts, PH[r.k].c, 120); drawMarks(cur, trackL) }
-  else { L.polyline(P.pts, {color: '#fff', weight: 11, opacity: .9}).addTo(trackL); L.polyline(P.pts, {color: PH[part].c, weight: 7}).addTo(trackL); addArrows(P.pts, PH[part].c, 120) }
-  guide.past = L.polyline([], {color: '#5f6b66', weight: 8, opacity: .75}).addTo(trackL);
+  if (part === 'all') { const RR = displayRuns(cur); for (const r of RR) drawRunLine(r, trackL); for (const r of RR) if (r.k !== 'trajet' && r.ll.length > 1) addArrows(r.ll, PH[r.k].c, 120); drawMarks(cur, trackL) }
+  else { const sm = smooth(P.pts); L.polyline(sm, {color: '#fff', weight: 10, opacity: .9, offset: OFF}).addTo(trackL); L.polyline(sm, {color: PH[part].c, weight: 6, offset: OFF}).addTo(trackL); addArrows(sm, PH[part].c, 120) }
+  guide.past = L.polyline([], {color: '#5f6b66', weight: 7, opacity: .8, offset: OFF}).addTo(trackL);
   L.marker(P.pts[0], {icon: pinIcon('D', '#1fa463')}).addTo(trackL);
   L.marker(P.pts[P.pts.length - 1], {icon: pinIcon('A', '#0f3b2e')}).addTo(trackL);
   $('#title').textContent = cur.name; setBack(true);
