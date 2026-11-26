@@ -155,6 +155,16 @@ input[type=text]:focus,textarea:focus{outline:none;box-shadow:inset 0 0 0 2px va
 .ph .pl small{display:block;font-weight:500;color:var(--mute);font-size:12px}
 .ph .pv{font-size:13px;color:var(--mute);text-align:right}
 .ph .pv b{color:var(--ink);font-weight:700}
+#pbar{position:fixed;left:12px;right:12px;z-index:595;max-width:616px;margin:0 auto;display:flex;align-items:center;gap:8px;padding:8px;border-radius:20px;background:var(--glass);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);box-shadow:var(--shadow)}
+#pbar button{width:46px;height:46px;flex:none;border:0;border-radius:14px;background:var(--soft);color:var(--ink);display:grid;place-items:center;font:800 14px "Inter Tight",sans-serif}
+#pbar button.pp{background:var(--g);color:#fff;border-radius:50%}
+#pbar button.pp svg{width:20px;height:20px;fill:currentColor;stroke:none}
+#pbar .pinfo{flex:1;min-width:0;display:grid;line-height:1.25;padding-left:4px}
+#pbar .pinfo b{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:flex;align-items:center;gap:7px}
+#pbar .pinfo b i{width:10px;height:10px;border-radius:50%;flex:none}
+#pbar .pinfo span{font-size:12.5px;color:var(--mute);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.legend{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--mute);margin:-2px 0 12px}
+.legend i{flex:1;height:8px;border-radius:4px;background:linear-gradient(90deg,#ffcf1a,#ff7a1a,#e5484d,#9b3fd1,#4b3bd6)}
 .snaprow{display:flex;align-items:center;gap:10px;margin:-4px 0 12px}.snaprow .place{background:var(--soft)}.snaprow .place.on{background:var(--ink);color:var(--bg)}.snaprow small{color:var(--mute);font-size:12.5px}
 .filters{display:flex;gap:6px;overflow-x:auto;margin:0 0 12px;padding-bottom:2px}
 .filters button{flex:none;border:0;min-height:38px;padding:0 13px;border-radius:99px;background:var(--soft);font-weight:700;font-size:13px;color:var(--mute);display:inline-flex;align-items:center;gap:7px}
@@ -257,6 +267,12 @@ details[open].card summary::after{transform:rotate(-135deg);margin-bottom:-4px}
 </div>
 <div id="noteCard" hidden><span class="ndot" id="ncDot"></span><div><div class="nt" id="ncT"></div><div class="nx" id="ncX"></div></div></div>
 
+<div id="pbar" hidden>
+  <button id="pPrev" aria-label="Reculer de 300 mètres">−300</button>
+  <button id="pPlay" class="pp" aria-label="Lecture"></button>
+  <button id="pNext" aria-label="Avancer de 300 mètres">+300</button>
+  <div class="pinfo"><b id="pPass"><i></i></b><span id="pTime"></span></div>
+</div>
 <button id="fab" aria-label="Recentrer sur ma position" hidden><svg class="i" viewBox="0 0 24 24"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg></button>
 
 <!-- Accueil -->
@@ -313,6 +329,8 @@ details[open].card summary::after{transform:rotate(-135deg);margin-bottom:-4px}
     <div class="stat"><b class="num" id="vTime"></b><span>temps actif</span></div>
     <div class="stat"><b class="num" id="vPause"></b><span>en pause</span></div>
   </div>
+  <div class="seg" id="modeSeg" style="margin-bottom:12px"><button data-m="portion">Portion</button><button data-m="heure">Par heure</button><button data-m="tours">Par tour</button></div>
+  <div class="legend" id="legend" hidden><span id="lgA"></span><i></i><span id="lgB"></span></div>
   <div class="filters" id="filters"></div>
   <div class="snaprow"><button class="place" id="snapBtn"><svg class="i" viewBox="0 0 24 24"><path d="M4 19c4 0 4-6 8-6s4 6 8 6M4 5h16"/></svg><span id="snapTxt">Coller aux routes</span></button><small id="snapInfo"></small></div>
   <button class="btn y" id="goGuide"><svg class="i" viewBox="0 0 24 24" style="fill:currentColor;stroke:none"><path d="M3 11l19-9-9 19-2-8-8-2z"/></svg>Me guider sur cette tournée</button>
@@ -633,7 +651,107 @@ function drawRunLine(run, layer) {
   L.polyline(ll, {color: PH[run.k].c, weight: 5, offset: OFF}).addTo(layer);
 }
 function drawMarks(t, layer) { for (const m of sortedMarks(t)) if (MK[m.type] && isFinite(m.lat)) L.marker([m.lat, m.lng], {icon: markIcon(m)}).bindPopup(`<b>${esc(MK[m.type].l)}</b>${m.site ? '<br>' + esc(SITE[m.site].full) : ''}`).addTo(layer) }
+let viewMode = load('tournees_vmode', 'portion');
+const GRAD = ['#ffcf1a', '#ff7a1a', '#e5484d', '#9b3fd1', '#4b3bd6'];
+function gradColor(f) {
+  f = Math.max(0, Math.min(1, f)) * (GRAD.length - 1); const i = Math.min(GRAD.length - 2, Math.floor(f)), u = f - i;
+  const h = c => [1, 3, 5].map(j => parseInt(c.substr(j, 2), 16)), a = h(GRAD[i]), b = h(GRAD[i + 1]);
+  return '#' + a.map((x, j) => Math.round(x + (b[j] - x) * u).toString(16).padStart(2, '0')).join('');
+}
+const portionL = L.layerGroup().addTo(map);
+function drawFaint(t, layer) { for (const seg of t.segments) if (seg.length > 1) L.polyline(smooth(seg), {color: '#8d9a94', weight: 3, opacity: .45, offset: OFF, interactive: false}).addTo(layer) }
+function drawByHour(t, f) {
+  const end = lastT(t) || 1;
+  for (const r of runs(t).filter(r => f === 'all' || r.k === f)) {
+    if (r.pts.length < 2) continue;
+    if (r.k === 'trajet') { L.polyline(smooth(r.pts), {color: PH.trajet.c, weight: 3, dashArray: '2 8', lineCap: 'round', offset: OFF}).addTo(trackL); continue }
+    L.polyline(smooth(r.pts), {color: '#fff', weight: 8, opacity: .9, offset: OFF}).addTo(trackL);
+    for (let i = 0; i < r.pts.length - 1; i += 12) {
+      const ch = r.pts.slice(i, i + 13); if (ch.length < 2) break;
+      L.polyline(smooth(ch), {color: gradColor(ch[Math.floor(ch.length / 2)][2] / end), weight: 5, offset: OFF, lineCap: 'butt'}).addTo(trackL);
+    }
+    addArrows(smooth(r.pts), '#22313b', 160);
+  }
+}
 function drawTour(t, f) {
+  portionL.clearLayers();
+  if (viewMode !== 'tours' && t !== rec) {
+    trackL.clearLayers(); arrowL.clearLayers(); f = f || 'all';
+    if (viewMode === 'heure') drawByHour(t, f); else { drawFaint(t, trackL); pc.key = null }
+    const all = flat(t);
+    if (all.length) { L.marker(all[0], {icon: pinIcon('D', '#1fa463')}).addTo(trackL); if (all.length > 1) L.marker(all[all.length - 1], {icon: pinIcon('A', '#0f3b2e')}).addTo(trackL) }
+    drawMarks(t, trackL);
+    if (viewMode === 'portion') updatePortion(true);
+    return;
+  }
+  drawTourPhases(t, f);
+}
+/* ---- portion autour du curseur ---- */
+const pc = {key: null, raw: [], cd: [], lastPass: 0};
+function portionData() {
+  const k = cur.id + ':' + flat(cur).length;
+  if (pc.key !== k) { pc.key = k; pc.raw = flat(cur); pc.cd = [0]; for (let i = 1; i < pc.raw.length; i++) pc.cd.push(pc.cd[i - 1] + (dist(pc.raw[i - 1], pc.raw[i]))) }
+  return pc;
+}
+function idxAtT(raw, tm) { let lo = 0, hi = raw.length - 1; if (!raw.length) return 0; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (raw[m][2] <= tm) lo = m; else hi = m } return raw[hi][2] <= tm ? hi : lo }
+function idxAtD(cd, d) { let lo = 0, hi = cd.length - 1; while (hi - lo > 1) { const m = (lo + hi) >> 1; if (cd[m] <= d) lo = m; else hi = m } return lo }
+let pcThrottle = 0;
+function updatePortion(force) {
+  if (!cur || viewMode !== 'portion' || view !== 'view') return;
+  const {raw, cd} = portionData(); if (raw.length < 2) return;
+  const i0 = idxAtT(raw, rp.t), d0 = cd[i0];
+  const s = idxAtD(cd, Math.max(0, d0 - 350)), e = Math.min(raw.length - 1, idxAtD(cd, d0 + 650) + 1);
+  const ph = phases(cur), k = phaseAt(ph, raw[i0][2]), col = k === 'trajet' ? '#5f6b66' : PH[k].c;
+  portionL.clearLayers();
+  const behind = raw.slice(s, i0 + 1), ahead = raw.slice(i0, e + 1);
+  if (behind.length > 1) L.polyline(smooth(behind), {color: col, weight: 5, opacity: .35, offset: OFF}).addTo(portionL);
+  if (ahead.length > 1) {
+    const sm = smooth(ahead);
+    L.polyline(sm, {color: '#fff', weight: 10, opacity: .95, offset: OFF}).addTo(portionL);
+    L.polyline(sm, {color: col, weight: 6, offset: OFF}).addTo(portionL);
+    const rs = resample(sm, 70);
+    for (let i = 1; i < rs.length; i++) L.marker([(rs[i - 1][0] + rs[i][0]) / 2, (rs[i - 1][1] + rs[i][1]) / 2], {icon: arrowIcon(bearing(rs[i - 1], rs[i]), col), interactive: false, keyboard: false}).addTo(portionL);
+  }
+  // passages au même endroit
+  const now = Date.now();
+  if (force || now - pcThrottle > 300) {
+    pcThrottle = now;
+    const pos = raw[i0], groups = []; let g = null;
+    for (let j = 0; j < raw.length; j++) if (Math.abs(raw[j][0] - pos[0]) < .0004 && Math.abs(raw[j][1] - pos[1]) < .0006 && dist(raw[j], pos) < 22) {
+      if (!g || cd[j] - g.e > 150) { g = {s: cd[j], e: cd[j]}; groups.push(g) } else g.e = cd[j];
+    }
+    let n = groups.findIndex(x => d0 >= x.s - 30 && d0 <= x.e + 30);
+    pc.pass = [n < 0 ? 1 : n + 1, Math.max(1, groups.length)];
+  }
+  const [a, b] = pc.pass || [1, 1];
+  $('#pPass').innerHTML = `<i style="background:${col}"></i>${esc(k === 'trajet' ? 'Trajet' : PH[k].l)}${b > 1 ? ' · passage ' + a + ' sur ' + b : ''}`;
+  $('#pTime').textContent = `${fmtT(rp.t)} / ${fmtT(rpEnd())} · ${fmtD(d0)} parcourus`;
+}
+function jumpPortion(dm) {
+  const {raw, cd} = portionData(); if (raw.length < 2) return;
+  const i0 = idxAtT(raw, rp.t), j = idxAtD(cd, Math.max(0, Math.min(cd[cd.length - 1], cd[i0] + dm)));
+  rp.t = raw[j][2]; rpDraw(); updatePortion(true);
+  const p = rpAt(rp.t); if (p) map.panTo(p);
+}
+$('#pPrev').onclick = () => { stopReplay(true); jumpPortion(-300) };
+$('#pNext').onclick = () => { stopReplay(true); jumpPortion(300) };
+$('#pPlay').onclick = () => $('#rpPlay').click();
+function paintMode() {
+  $('#modeSeg').querySelectorAll('button').forEach(b => b.classList.toggle('on', b.dataset.m === viewMode));
+  $('#legend').hidden = viewMode !== 'heure';
+  if (cur) { $('#lgA').textContent = 'Début ' + fmtClock(cur.created); $('#lgB').textContent = 'Fin' }
+  $('#pbar').hidden = !(view === 'view' && viewMode === 'portion');
+  if (viewMode === 'portion') $('#filters').hidden = true; else renderFilters();
+  placeFab();
+}
+$('#modeSeg').onclick = e => {
+  const b = e.target.closest('[data-m]'); if (!b || !cur) return;
+  viewMode = b.dataset.m; save('tournees_vmode', viewMode);
+  if (viewMode === 'portion') { if (!rp.marker) rpDraw() }
+  drawTour(cur, filter); paintMode();
+  if (viewMode === 'portion') { const p = rpAt(rp.t); if (p) map.setView(p, Math.max(map.getZoom(), 16)) } else fit(filter === 'all' ? flat(cur) : partRaw(cur, filter));
+};
+function drawTourPhases(t, f) {
   trackL.clearLayers(); arrowL.clearLayers();
   f = f || 'all';
   const RR = displayRuns(t).filter(r => f === 'all' || r.k === f);
@@ -728,10 +846,11 @@ function show(v) {
   $('#banner').hidden = v !== 'guide'; $('#noteCard').hidden = true;
   $('#snd').hidden = v !== 'guide';
   $('#fab').hidden = true; follow = true;
+  $('#pbar').hidden = true; portionL.clearLayers();
   placeFab();
 }
 function setBack(on) { $('#back').hidden = !on; $('#logo').hidden = on }
-function placeFab() { requestAnimationFrame(() => { $('#fab').style.bottom = (sheetH() + 14) + 'px'; const b = $('#banner'), top = b.hidden ? 'calc(env(safe-area-inset-top) + 76px)' : (b.offsetTop + b.offsetHeight + 10) + 'px'; $('#noteCard').style.top = top; $('#toast').style.top = top }) }
+function placeFab() { requestAnimationFrame(() => { const pb = $('#pbar'), ph = pb.hidden ? 0 : pb.offsetHeight + 10; pb.style.bottom = (sheetH() + 10) + 'px'; $('#fab').style.bottom = (sheetH() + 14 + ph) + 'px'; const b = $('#banner'), top = b.hidden ? 'calc(env(safe-area-inset-top) + 76px)' : (b.offsetTop + b.offsetHeight + 10) + 'px'; $('#noteCard').style.top = top; $('#toast').style.top = top }) }
 for (const g of document.querySelectorAll('.grab')) g.onclick = () => { g.parentElement.classList.toggle('min'); setTimeout(placeFab, 300) };
 $('#back').onclick = () => {
   if (view === 'rec' && (!rec || !rec.segments.length)) { rec = null; stopWatch(); hideMe(); goHome() }
@@ -967,7 +1086,9 @@ function openTour(id, keep) {
   if (!keep) { extraL.clearLayers(); rp.marker = null; $('#stepsBox').open = false; show('view') }
   renderFilters(); paintSnap(); renderDay(); renderMarks(); renderNotes(); renderSteps();
   rp.pts = flat(cur); if (!keep) rp.t = 0; paintRp(); rpInfo();
-  if (!keep) fit(rp.pts);
+  paintMode();
+  if (viewMode === 'portion') { rpDraw(); updatePortion(true); if (!keep) { const p = rpAt(rp.t); if (p) map.setView(p, 16) } }
+  else if (!keep) fit(rp.pts);
   loadStreets(cur, prep(cur, filter === 'trajet' ? 'all' : filter), renderSteps);
 }
 const refresh = () => { save(KEY, tours); openTour(cur.id, true) };
@@ -1013,7 +1134,7 @@ $('#snapBtn').onclick = async () => {
 };
 function renderFilters() {
   const parts = partsOf(cur);
-  if (parts.length < 2) { $('#filters').hidden = true; return }
+  if (parts.length < 2 || viewMode === 'portion') { $('#filters').hidden = true; return }
   $('#filters').hidden = false;
   $('#filters').innerHTML = [['all', 'Tout', null]].concat(parts.map(k => [k, PH[k].l, PH[k].c])).map(([k, l, c]) => `<button data-f="${k}" class="${k === filter ? 'on' : ''}">${c ? `<i style="background:${c}"></i>` : ''}${esc(l)}</button>`).join('');
 }
@@ -1112,7 +1233,7 @@ function rpDraw() {
   const p = rpAt(rp.t); if (!p) return;
   if (!rp.marker) rp.marker = L.circleMarker(p, {radius: 10, color: '#fff', weight: 3, fillColor: '#0f3b2e', fillOpacity: 1}).addTo(extraL);
   else rp.marker.setLatLng(p);
-  rpInfo();
+  rpInfo(); updatePortion();
   if (!map.getBounds().pad(-.25).contains(p)) map.panTo(p);
 }
 function rpLoop(ts) {
@@ -1122,7 +1243,7 @@ function rpLoop(ts) {
   rpDraw(); rp.raf = requestAnimationFrame(rpLoop);
 }
 function stopReplay(keep) { cancelAnimationFrame(rp.raf); rp.on = false; rp.last = 0; paintRp(); if (!keep && rp.marker) { extraL.removeLayer(rp.marker); rp.marker = null } }
-function paintRp() { $('#rpPlay').innerHTML = `<svg viewBox="0 0 24 24">${rp.on ? ICO.pause : ICO.play}</svg>` }
+function paintRp() { const h = `<svg viewBox="0 0 24 24">${rp.on ? ICO.pause : ICO.play}</svg>`; $('#rpPlay').innerHTML = h; $('#pPlay').innerHTML = h }
 $('#rpPlay').onclick = () => {
   if (rp.pts.length < 2) return;
   if (rp.on) { stopReplay(true); return }
@@ -1213,9 +1334,10 @@ function startGuide(part) {
   }
   guide = {P, part, notes, stages, idx: 0, said: new Set(), off: false, done: false, started: false, dumpSite: null};
   trackL.clearLayers(); arrowL.clearLayers(); extraL.clearLayers(); rp.marker = null; drawNotes(cur.notes); drawSites();
-  if (part === 'all') { const RR = displayRuns(cur); for (const r of RR) drawRunLine(r, trackL); for (const r of RR) if (r.k !== 'trajet' && r.ll.length > 1) addArrows(r.ll, PH[r.k].c, 120); drawMarks(cur, trackL) }
-  else { const sm = smooth(P.pts); L.polyline(sm, {color: '#fff', weight: 10, opacity: .9, offset: OFF}).addTo(trackL); L.polyline(sm, {color: PH[part].c, weight: 6, offset: OFF}).addTo(trackL); addArrows(sm, PH[part].c, 120) }
-  guide.past = L.polyline([], {color: '#5f6b66', weight: 7, opacity: .8, offset: OFF}).addTo(trackL);
+  drawFaint(cur, trackL); if (part === 'all') drawMarks(cur, trackL);
+  guide.aheadHalo = L.polyline([], {color: '#fff', weight: 11, opacity: .95, offset: OFF}).addTo(trackL);
+  guide.ahead = L.polyline([], {color: '#ff7a1a', weight: 7, offset: OFF}).addTo(trackL);
+  guide.aheadArrows = L.layerGroup().addTo(trackL); guide.lastPaint = -1;
   L.marker(P.pts[0], {icon: pinIcon('D', '#1fa463')}).addTo(trackL);
   L.marker(P.pts[P.pts.length - 1], {icon: pinIcon('A', '#0f3b2e')}).addTo(trackL);
   $('#title').textContent = cur.name; setBack(true);
@@ -1225,9 +1347,18 @@ function startGuide(part) {
   $('#bDist').textContent = '–'; $('#bTxt').textContent = 'Recherche du GPS…'; $('#bStreet').textContent = ''; $('#bThen').hidden = true;
   $('#gLeft').textContent = fmtD(P.total); $('#gEta').textContent = fmtH(etaMs(1)); $('#gDone').textContent = '0 %'; $('#gBar').style.width = '0';
   $('#gDump').hidden = true; $('#gOffRow').hidden = true;
-  placeFab(); keepAwake(true); startWatch(onGuideFix); say('Guidage lancé. ' + (part === 'all' ? cur.name : PH[part].l));
+  paintAhead(); placeFab(); keepAwake(true); startWatch(onGuideFix); say('Guidage lancé. ' + (part === 'all' ? cur.name : PH[part].l));
   map.setView(P.pts[0], 16);
   loadStreets(cur, P);
+}
+function paintAhead() {
+  const g = guide; if (!g || g.lastPaint === g.idx) return; g.lastPaint = g.idx;
+  const P = g.P, a = P.pts.slice(g.idx, g.idx + 101); if (a.length < 2) { g.ahead.setLatLngs([]); g.aheadHalo.setLatLngs([]); g.aheadArrows.clearLayers(); return }
+  let col = g.part === 'all' ? PH.tour1.c : PH[g.part].c;
+  if (g.part === 'all') { const s = g.stages.filter(x => x.i <= g.idx).slice(-1)[0]; const k = s ? s.to : phases(cur)[0].k; col = k === 'trajet' ? '#5f6b66' : PH[k].c }
+  const sm = smooth(a); g.aheadHalo.setLatLngs(sm); g.ahead.setLatLngs(sm); g.ahead.setStyle({color: col});
+  g.aheadArrows.clearLayers(); const rs = resample(sm, 70);
+  for (let i = 1; i < rs.length; i++) L.marker([(rs[i - 1][0] + rs[i][0]) / 2, (rs[i - 1][1] + rs[i][1]) / 2], {icon: arrowIcon(bearing(rs[i - 1], rs[i]), col), interactive: false, keyboard: false}).addTo(g.aheadArrows);
 }
 function etaMs(frac) {
   if (!guide) return 0;
@@ -1246,7 +1377,7 @@ function onGuideFix(p) {
   if (!guide) return;
   const pos = [p.coords.latitude, p.coords.longitude], acc = p.coords.accuracy, g = guide, P = g.P;
   showMe(pos, acc);
-  if (follow) map.setView(pos, Math.max(map.getZoom(), 17), {animate: true});
+  if (follow) { if (!g.started && dist(pos, P.pts[0]) > 60) map.fitBounds(L.latLngBounds([pos, P.pts[0]]), {paddingTopLeft: [40, 200], paddingBottomRight: [40, sheetH() + 40], maxZoom: 17}); else map.setView(pos, Math.max(map.getZoom(), 17), {animate: true}) }
   if (acc > 50) { $('#bTxt').textContent = 'GPS imprécis…'; return }
   // progression uniquement vers l'avant : jamais de saut vers la fin parce que départ = arrivée
   let n = nearestAll(P.pts, pos, g.idx - 10, g.idx + 80);
@@ -1261,7 +1392,7 @@ function onGuideFix(p) {
     placeFab(); return;
   }
   if (g.off) { g.off = false; $('#banner').className = ''; $('#gOffRow').hidden = true; say('Tu es sur le tracé') }
-  g.past.setLatLngs(P.pts.slice(0, g.idx + 1));
+  paintAhead();
   const done = P.cum[g.idx], left = P.total - done, pct = Math.round(done / P.total * 100);
   $('#gBar').style.width = pct + '%'; $('#gDone').textContent = pct + ' %'; $('#gLeft').textContent = fmtD(left);
   $('#gEta').textContent = fmtH(etaMs(left / P.total));
